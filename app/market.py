@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
+import exchange_calendars as xcals
 
 from .catalog import exchange_of
 from .config import BARS_DIR
@@ -264,28 +265,30 @@ def mark_verified(code: str, adjustment: str, start: date, end: date, source: st
 
 
 def _expected_sessions(first: date, last: date) -> set[date]:
-    """Use cached Shanghai closes as the calendar, with a conservative tail."""
-    path = bar_path("sh000001", "index", index=True)
-    index_dates = _index_calendar(str(path), path.stat().st_mtime_ns) if path.exists() else ()
-    if index_dates:
-        known = {value for value in index_dates if first <= value <= last}
-        first_known = index_dates[0]
-        last_known = index_dates[-1]
-        if first >= first_known:
-            cursor = max(first, last_known + timedelta(days=1))
-            while cursor <= last:
-                if cursor.weekday() < 5:
-                    known.add(cursor)
-                cursor += timedelta(days=1)
-            return known
-    return {day.date() for day in pd.date_range(first, last, freq="B")}
+    """Use an independent exchange calendar, never potentially incomplete index bars."""
+    if first > last:
+        return set()
+    window_start, window_end = history_start(), completed_bar_cutoff()
+    known = {day for day in _exchange_calendar(window_start, window_end) if first <= day <= last}
+    if first < window_start:
+        known.update(day.date() for day in pd.date_range(first, min(last, window_start - timedelta(days=1)), freq="B"))
+    if last > window_end:
+        known.update(day.date() for day in pd.date_range(max(first, window_end + timedelta(days=1)), last, freq="B"))
+    return known
 
 
-@lru_cache(maxsize=8)
-def _index_calendar(path: str, modified_ns: int) -> tuple[date, ...]:
-    del modified_ns  # The modification time is part of the cache key.
-    frame = pd.read_parquet(path, columns=["date"])
-    return tuple(date.fromisoformat(str(value)) for value in frame["date"])
+@lru_cache(maxsize=4)
+def _exchange_calendar(first: date, last: date) -> frozenset[date]:
+    if first > last:
+        return frozenset()
+    try:
+        calendar = xcals.get_calendar("XSHG", start=first.isoformat(), end=last.isoformat())
+        return frozenset(stamp.date() for stamp in calendar.sessions_in_range(first.isoformat(), last.isoformat()))
+    except Exception as exc:
+        # If a future year is not yet in the installed package, leaving all
+        # absent weekdays unverified is conservative and allows a later retry.
+        LOG.warning("XSHG calendar unavailable; using conservative weekdays: %s", exc)
+        return frozenset(stamp.date() for stamp in pd.date_range(first, last, freq="B"))
 
 
 def _confirmed_intervals(first: date, last: date, observed: set[date],
@@ -439,10 +442,28 @@ def _sync_stock_locked(code: str, *, target: date | None = None) -> dict[str, ob
 
 def sync_index(code: str, *, target: date | None = None) -> dict[str, object]:
     cutoff = min(target or completed_bar_cutoff(), completed_bar_cutoff())
-    ranges = unchecked_ranges(code, "index", history_start(), cutoff)
+    start = history_start()
+    expected = _expected_sessions(start, cutoff)
+    staged = read_bars(code, index=True)
+    # Rebuild old coverage too: earlier versions trusted the provider's returned
+    # index dates and could accidentally certify an omitted trading session.
+    observed_saved = _bar_dates(staged)
+    if observed_saved:
+        saved_first = max(start, min(observed_saved))
+        saved_last = min(cutoff, max(observed_saved))
+        rebuilt = _confirmed_intervals(saved_first, saved_last, observed_saved,
+                                       expected_override=expected) if saved_first <= saved_last else []
+    else:
+        rebuilt = []
+    with connection() as db:
+        db.execute("DELETE FROM coverage WHERE code=? AND adjustment='index'", (code,))
+        db.executemany("""INSERT INTO coverage(code,adjustment,start_date,end_date,source,checked_at)
+                          VALUES(?,'index',?,?,?,?)""",
+                       [(code, first.isoformat(), last.isoformat(), "交易日历+本地指数", utc_now())
+                        for first, last in rebuilt])
+    ranges = unchecked_ranges(code, "index", start, cutoff)
     if not ranges:
         return {"code": code, "status": "skipped"}
-    staged = read_bars(code, index=True)
     checked = []
     for first, last in ranges:
         frame, source = fetch_index(code, first, last)
@@ -450,12 +471,15 @@ def sync_index(code: str, *, target: date | None = None) -> dict[str, object]:
             raise RuntimeError("指数接口未返回历史行情")
         staged = _merge(staged, frame)
         observed = _bar_dates(frame)
-        # The exchange index itself defines historical sessions. Only its
-        # unreturned, recent weekday tail is left open for a later update.
-        latest = max(observed) if observed else first - timedelta(days=1)
-        expected = observed | {day.date() for day in pd.date_range(max(first, latest + timedelta(days=1)), last, freq="B")}
-        checked.extend((covered_first, covered_last, source) for covered_first, covered_last
-                       in _confirmed_intervals(first, last, observed, expected_override=expected))
+        if not observed and not any(first <= day <= last for day in expected):
+            checked.append((first, last, "XSHG 交易日历"))
+            continue
+        interval_first = max(first, min(observed)) if observed else first
+        interval_last = min(last, max(observed)) if observed else first - timedelta(days=1)
+        if interval_first <= interval_last:
+            checked.extend((covered_first, covered_last, source) for covered_first, covered_last
+                           in _confirmed_intervals(interval_first, interval_last, observed,
+                                                   expected_override={day for day in expected if interval_first <= day <= interval_last}))
     _write_bars(bar_path(code, "index", index=True), staged)
     for first, last, source in checked:
         mark_verified(code, "index", first, last, source)

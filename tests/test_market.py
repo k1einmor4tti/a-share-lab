@@ -140,3 +140,38 @@ def test_truncated_rebase_does_not_replace_saved_history(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="只返回部分历史"):
         market.sync_stock("600000")
     pd.testing.assert_frame_equal(market.read_bars("600000", "qfq"), old)
+
+
+def test_index_missing_interior_session_stays_unverified_and_is_repaired(tmp_path, monkeypatch):
+    setup_market(tmp_path, monkeypatch, date(2026, 9, 21))
+    calls = []
+
+    def fetch(_code, first, last):
+        calls.append((first, last))
+        frame = sample_bars(first, last, source="BaoStock")
+        if len(calls) == 1:
+            frame = frame[frame["date"] != "2026-09-18"]
+        return frame, "BaoStock"
+
+    monkeypatch.setattr(market, "fetch_index", fetch)
+    market.sync_index("sh000001")
+    assert market.unchecked_ranges("sh000001", "index", date(2026, 9, 16), date(2026, 9, 21)) == [
+        (date(2026, 9, 18), date(2026, 9, 18))]
+    assert date(2026, 9, 18) in market._expected_sessions(date(2026, 9, 16), date(2026, 9, 21))
+    market.sync_index("sh000001")
+    assert calls[-1] == (date(2026, 9, 18), date(2026, 9, 18))
+    assert market.unchecked_ranges("sh000001", "index", date(2026, 9, 16), date(2026, 9, 21)) == []
+
+
+def test_index_reconciles_old_false_coverage(tmp_path, monkeypatch):
+    setup_market(tmp_path, monkeypatch, date(2026, 9, 21))
+    old = sample_bars(date(2026, 9, 16), date(2026, 9, 21), source="BaoStock")
+    old = old[old["date"] != "2026-09-18"]
+    market._write_bars(market.bar_path("sh000001", "index", index=True), old)
+    market.mark_verified("sh000001", "index", date(2026, 9, 16), date(2026, 9, 21), "legacy")
+    calls = []
+    monkeypatch.setattr(market, "fetch_index", lambda _code, first, last: (
+        calls.append((first, last)) or sample_bars(first, last, source="BaoStock"), "BaoStock"))
+    market.sync_index("sh000001")
+    assert calls == [(date(2026, 9, 18), date(2026, 9, 18))]
+    assert "2026-09-18" in set(market.read_bars("sh000001", index=True)["date"])

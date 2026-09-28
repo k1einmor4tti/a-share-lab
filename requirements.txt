@@ -7,3 +7,4 @@ pandas>=2.2,<4
 pyarrow>=14,<26
 requests>=2.34,<3
 baostock>=0.8.9,<1
+exchange_calendars>=4.13.2,<5

@@ -134,11 +134,16 @@ function renderDetail(payload) {
   const bars = payload.bars;
   const sources = [...new Set(bars.map((bar) => bar.source).filter(Boolean))];
   const latest = bars.at(-1);
+  const availableFirst = state.adjustment === 'raw' ? symbol.raw_first : symbol.adjusted_first;
+  const availableLast = state.adjustment === 'raw' ? symbol.raw_last : symbol.adjusted_last;
+  const missing = payload.unverified_ranges || [];
+  const missingLabel = missing.length ? missing.slice(0, 4).map((range) => `${escapeHtml(range.start)}—${escapeHtml(range.end)}`).join('、') + (missing.length > 4 ? ` 等 ${missing.length} 段` : '') : '无未验证区间';
   const detail = $('#chart-side');
   detail.innerHTML = `<div class="detail-heading"><div><h3>${escapeHtml(symbol.name)}</h3><p>${escapeHtml(symbol.code)} · ${isStock ? escapeHtml(symbol.exchange) + ' · 日线' : '指数 · 日线'}</p></div>
     <span class="detail-status ${symbol.status === 'delisted' ? 'delisted' : ''}">${symbol.status === 'delisted' ? '已退市' : '本地历史'}</span></div>
     ${isStock ? `<div class="detail-actions"><button id="detail-backtest" class="text-button">使用这只股票回测 ↗</button>${!bars.length ? '<button id="detail-priority" class="text-button">优先下载此股 ↻</button>' : ''}</div>` : ''}
     <div class="detail-meta"><span>最新收盘<strong>${format(latest?.close)}</strong></span><span>日期<strong>${escapeHtml(latest?.date || '—')}</strong></span><span>总根数<strong>${integer(payload.total_bars)}</strong></span></div>
+    ${isStock ? `<div class="coverage-detail"><strong>可用行情</strong><span>${escapeHtml(availableFirst || '—')} — ${escapeHtml(availableLast || '—')}</span><strong>未验证区间</strong><span>${missingLabel}</span></div>` : ''}
     <div class="chart-toolbar"><div class="segmented" id="range-switch"><button data-range="1Y">近 1 年</button><button data-range="5Y">近 5 年</button><button data-range="ALL">全部</button></div>
     ${isStock ? '<div class="segmented" id="adjust-switch"><button data-adjust="qfq">前复权</button><button data-adjust="raw">未复权</button></div>' : ''}</div>
     <div class="chart-wrap"><canvas id="price-chart" aria-label="历史收盘价折线图"></canvas><div class="chart-tooltip" id="chart-tooltip"></div></div>

@@ -128,16 +128,34 @@ def skill_context(ids: list[str]) -> str:
 
 
 def _get_json(url: str) -> dict[str, Any]:
-    response = requests.get(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "a-share-lab"},
-                            timeout=12, allow_redirects=False)
-    if response.status_code != 200:
-        raise ValueError(f"GitHub 返回 {response.status_code}，请检查公开仓库地址或稍后重试")
-    if len(response.content) > MAX_TOTAL_BYTES * 4:
-        raise ValueError("GitHub 目录信息过大")
-    value = response.json()
+    content = _get_bytes(url, MAX_TOTAL_BYTES * 4, json_api=True)
+    value = json.loads(content)
     if not isinstance(value, dict):
         raise ValueError("GitHub 返回格式无效")
     return value
+
+
+def _get_bytes(url: str, limit: int, *, json_api: bool = False) -> bytes:
+    headers = {"User-Agent": "a-share-lab"}
+    if json_api:
+        headers["Accept"] = "application/vnd.github+json"
+    response = requests.get(url, headers=headers, timeout=12, allow_redirects=False, stream=True)
+    try:
+        if response.status_code != 200:
+            raise ValueError(f"GitHub 返回 {response.status_code}，请检查公开仓库地址或稍后重试")
+        stated_size = response.headers.get("Content-Length")
+        if stated_size and stated_size.isdigit() and int(stated_size) > limit:
+            raise ValueError("GitHub 资料超过大小限制")
+        chunks = []
+        size = 0
+        for chunk in response.iter_content(chunk_size=8192):
+            size += len(chunk)
+            if size > limit:
+                raise ValueError("GitHub 资料超过大小限制")
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        response.close()
 
 
 def import_github(url: str) -> list[dict[str, Any]]:
@@ -183,11 +201,9 @@ def import_github(url: str) -> list[dict[str, Any]]:
     total = 0
     for path in chosen:
         raw_url = f"https://raw.githubusercontent.com/{quote(owner)}/{quote(repo)}/{quote(branch, safe='')}/{quote(path)}"
-        response = requests.get(raw_url, timeout=12, allow_redirects=False)
-        if response.status_code != 200:
-            raise ValueError(f"GitHub 文件下载失败：{path} ({response.status_code})")
-        total += len(response.content)
-        if len(response.content) > MAX_FILE_BYTES or total > MAX_TOTAL_BYTES:
+        content = _get_bytes(raw_url, min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total))
+        total += len(content)
+        if total > MAX_TOTAL_BYTES:
             raise ValueError("GitHub skill 资料超过大小限制")
-        files.append({"path": path, "content": response.content.decode("utf-8")})
+        files.append({"path": path, "content": content.decode("utf-8")})
     return import_files(files, url)

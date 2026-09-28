@@ -74,7 +74,10 @@ def status() -> dict[str, Any]:
 
 
 def _messages(session_id: str) -> list[dict[str, Any]]:
-    value = _history(session_id)
+    return _messages_from_history(_history(session_id))
+
+
+def _messages_from_history(value: dict[str, Any]) -> list[dict[str, Any]]:
     messages = []
     for item in value.get("events", []):
         event = item.get("event", {})
@@ -106,7 +109,8 @@ def _prepare_session() -> None:
     _rpc("session.prompt", {"sessionId": candidate, "mode": "queue",
                             "content": [{"type": "text", "text": "Capability check only. Reply OK."}],
                             "clientTimeZone": "Asia/Shanghai"})
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 45
+    seen_tool_free_header = False
     while time.monotonic() < deadline:
         events = [item.get("event", {}) for item in _history(candidate).get("events", [])]
         header = next((event.get("data", {}).get("header", {}) for event in events
@@ -117,8 +121,15 @@ def _prepare_session() -> None:
                 _session_error = ("DSH 当前会话仍注入了全局工具，无法安全读取 skill。"
                                   "请在 DSH 中禁用全局工具插件后重启平台。")
                 raise AssistantError(_session_error)
-            _session_id = candidate
-            return
+            seen_tool_free_header = True
+        end = next((event for event in reversed(events) if event.get("type") == "turn/end"), None)
+        if end is not None:
+            if end.get("data", {}).get("reason", {}).get("kind") == "error":
+                raise AssistantError("DSH 模型请求失败，策略问答暂不可用")
+            if seen_tool_free_header and any(event.get("type") == "assistant/message" for event in events):
+                _session_id = candidate
+                return
+            raise AssistantError("DSH 预设探测未收到完整回答，策略问答保持关闭")
         time.sleep(0.25)
     raise AssistantError("无法验证 DSH 会话的实际工具清单，策略问答保持关闭")
 
@@ -141,8 +152,15 @@ def ask(question: str, skill_ids: list[str]) -> dict[str, str]:
                                 "content": [{"type": "text", "text": prompt}], "clientTimeZone": "Asia/Shanghai"})
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
-            replies = [item for item in _messages(_session_id) if item["seq"] > before]
+            history = _history(_session_id)
+            replies = [item for item in _messages_from_history(history) if item["seq"] > before]
             if replies:
                 return {"answer": replies[-1]["text"], "session_id": _session_id}
+            ends = [item.get("event", {}) for item in history.get("events", [])
+                    if item.get("event", {}).get("type") == "turn/end" and item.get("event", {}).get("seq", -1) > before]
+            if ends and ends[-1].get("data", {}).get("reason", {}).get("kind") == "error":
+                _session_id = None
+                raise AssistantError("DSH 模型请求失败，请检查 DSH 服务和模型连接")
             time.sleep(0.8)
+        _session_id = None
         raise AssistantError("DSH 回答超时，可稍后重试")

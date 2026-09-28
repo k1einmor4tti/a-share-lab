@@ -35,11 +35,15 @@ def test_github_import_checks_public_origin_and_subdirectory(tmp_path, monkeypat
 
     class Response:
         status_code = 200
+        headers = {}
         def __init__(self, value):
             self.value = value
-            self.content = value if isinstance(value, bytes) else b"{}"
-        def json(self):
-            return self.value
+            self.content = value if isinstance(value, bytes) else __import__("json").dumps(value).encode()
+        def iter_content(self, chunk_size=8192):
+            for start in range(0, len(self.content), chunk_size):
+                yield self.content[start:start + chunk_size]
+        def close(self):
+            pass
 
     def get(url, **_kwargs):
         calls.append(url)
@@ -60,6 +64,25 @@ def test_github_import_checks_public_origin_and_subdirectory(tmp_path, monkeypat
                 "https://github.com@evil.example/x/y", "https://github.com/demo/strategies/tree/main/../secret"):
         with pytest.raises(ValueError):
             skills.import_github(url)
+
+
+def test_github_stream_limit_stops_oversized_response(monkeypatch):
+    class Response:
+        status_code = 200
+        headers = {}
+        closed = False
+        def iter_content(self, chunk_size=8192):
+            yield b"a" * chunk_size
+            yield b"b" * chunk_size
+            raise AssertionError("must stop reading when cap is reached")
+        def close(self):
+            self.closed = True
+
+    response = Response()
+    monkeypatch.setattr(skills.requests, "get", lambda *_args, **_kwargs: response)
+    with pytest.raises(ValueError, match="大小"):
+        skills._get_bytes("https://api.github.com/example", 8192)
+    assert response.closed
 
 
 def test_dsh_refuses_changed_preset_before_prompt(tmp_path, monkeypatch):
@@ -112,6 +135,31 @@ def test_dsh_checks_effective_catalog_before_imported_text(tmp_path, monkeypatch
         assistant.ask("解释参数", [imported[0]["id"]])
     assert len(prompts) == 1
     assert "SECRET_REFERENCE" not in prompts[0]
+
+
+def test_dsh_probe_waits_for_own_completed_reply(monkeypatch):
+    monkeypatch.setattr(assistant, "_session_id", None)
+    monkeypatch.setattr(assistant, "_session_error", None)
+    monkeypatch.setattr(assistant, "_verify_preset", lambda: None)
+    views = []
+
+    def rpc(method, payload, timeout=12):
+        if method == "session.create":
+            return {"sessionId": "probe"}
+        if method == "session.history":
+            views.append(1)
+            events = [{"event": {"type": "request/header", "data": {"header": {"tools": []}}}}]
+            if len(views) > 1:
+                events.extend([{"event": {"type": "assistant/message", "data": {"message": {"content": [{"type": "text", "text": "OK"}]}}}},
+                               {"event": {"type": "turn/end", "data": {"reason": {"kind": "stop"}}}}])
+            return {"events": events}
+        return {}
+
+    monkeypatch.setattr(assistant, "_rpc", rpc)
+    monkeypatch.setattr(assistant.time, "sleep", lambda _: None)
+    assistant._prepare_session()
+    assert len(views) == 2
+    assert assistant._session_id == "probe"
 
 
 def test_skill_routes_and_assistant_failure_are_isolated(tmp_path, monkeypatch):

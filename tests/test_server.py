@@ -27,6 +27,8 @@ def test_dashboard_routes_and_input_validation(tmp_path, monkeypatch):
         bars = client.get("/api/stocks/600000/bars").json()
         assert bars["bars"][0]["source"] == "test"
         assert bars["coverage"][0]["start"] == "2025-01-02"
+        assert bars["unverified_ranges"]
+        assert bars["target_range"]["start"] >= "2000-01-01"
         assert client.get("/api/stocks/600000/bars", params={"adjustment": "../../bad"}).status_code == 422
         assert client.get("/api/stocks/400001/bars").status_code == 422
         assert client.get("/api/indexes/sh000001/bars").status_code == 200

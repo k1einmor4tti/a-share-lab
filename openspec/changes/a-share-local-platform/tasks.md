@@ -21,7 +21,7 @@
 - [x] 4.1 Build and verify the local market dashboard, search, historical chart and sync progress; commit.
 - [x] 4.2 Build and verify strategy forms, backtest result view, comparison and downloads; commit.
 - [x] 4.3 Implement safe local/GitHub SKILL.md import and tool-free DSH assistant connection; commit.
-- [ ] 4.4 Have a sub-agent review phase 4 usability, input handling and assistant boundary; commit fixes separately.
+- [x] 4.4 Have a sub-agent review phase 4 usability, input handling and assistant boundary; commit fixes separately.
 
 ## 5. End-to-end delivery
 

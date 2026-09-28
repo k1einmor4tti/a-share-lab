@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -99,9 +100,19 @@ def stock_bars(code: str, adjustment: str = "qfq", start: str | None = None,
     if symbol is None:
         raise HTTPException(404, "股票不在目录中")
     frame = market.read_bars(code, adjustment)
+    first = market.history_start()
+    if symbol.get("listing_date"):
+        first = max(first, date.fromisoformat(symbol["listing_date"]))
+    last = market.completed_bar_cutoff()
+    if symbol.get("delisting_date"):
+        last = min(last, date.fromisoformat(symbol["delisting_date"]))
+    gaps = market.unchecked_ranges(code, adjustment, first, last)
     return {"symbol": symbol, "adjustment": adjustment,
             "coverage": [{"start": first.isoformat(), "end": last.isoformat()}
                          for first, last in market.verified_intervals(code, adjustment)],
+            "target_range": {"start": first.isoformat(), "end": last.isoformat()},
+            "unverified_ranges": [{"start": gap_start.isoformat(), "end": gap_end.isoformat()}
+                                  for gap_start, gap_end in gaps],
             "bars": _bars(frame, start, end, limit), "total_bars": len(frame)}
 
 

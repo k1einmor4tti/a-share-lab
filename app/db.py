@@ -80,6 +80,13 @@ def init_db() -> None:
                 started_at TEXT NOT NULL,
                 finished_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS job_failures (
+                job_id TEXT NOT NULL,
+                code TEXT NOT NULL,
+                error TEXT NOT NULL,
+                PRIMARY KEY(job_id,code),
+                FOREIGN KEY(job_id) REFERENCES jobs(id)
+            );
             CREATE TABLE IF NOT EXISTS skills (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -99,6 +106,7 @@ def init_db() -> None:
             """
         )
         db.execute("UPDATE jobs SET status='interrupted', finished_at=? WHERE status='running'", (utc_now(),))
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_running ON jobs(status) WHERE status='running'")
 
 
 def rows(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
@@ -114,4 +122,3 @@ def row(sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
 def execute(sql: str, params: tuple[Any, ...] = ()) -> None:
     with connection() as db:
         db.execute(sql, params)
-

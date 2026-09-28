@@ -9,10 +9,11 @@ from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
-from . import catalog, db, jobs, market
+from . import backtests, catalog, db, jobs, market, strategies
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
@@ -104,6 +105,16 @@ def stock_bars(code: str, adjustment: str = "qfq", start: str | None = None,
             "bars": _bars(frame, start, end, limit), "total_bars": len(frame)}
 
 
+@app.post("/api/stocks/{code}/sync")
+def prioritize_stock(code: str) -> dict[str, Any]:
+    if not catalog.is_a_share(code):
+        raise HTTPException(422, "股票代码必须是六位 A 股代码")
+    try:
+        return jobs.manager.prioritize(code)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @app.get("/api/indexes/{code}/bars")
 def index_bars(code: str, start: str | None = None, end: str | None = None,
                limit: int = Query(6000, ge=1, le=10000)) -> dict[str, Any]:
@@ -112,3 +123,50 @@ def index_bars(code: str, start: str | None = None, end: str | None = None,
     frame = market.read_bars(code, index=True)
     return {"code": code, "name": market.INDEXES[code], "bars": _bars(frame, start, end, limit),
             "total_bars": len(frame)}
+
+
+class BacktestRequest(BaseModel):
+    code: str = Field(pattern=r"^\d{6}$")
+    strategy: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    start: str | None = None
+    end: str | None = None
+    execution: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.get("/api/strategies")
+def strategy_catalog() -> dict[str, Any]:
+    from dataclasses import asdict
+    return {"modules": strategies.module_schemas(), "execution_defaults": asdict(backtests.ExecutionOptions())}
+
+
+@app.post("/api/backtests")
+def create_backtest(request: BacktestRequest) -> dict[str, Any]:
+    try:
+        return backtests.run_backtest(request.code, request.strategy, request.params,
+                                      start=request.start, end=request.end, execution=request.execution)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/backtests")
+def backtest_history(limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
+    return {"items": backtests.list_backtests(limit)}
+
+
+@app.get("/api/backtests/{run_id}")
+def backtest_result(run_id: str) -> dict[str, Any]:
+    report = backtests.saved_backtest(run_id)
+    if report is None:
+        raise HTTPException(404, "未找到回测记录")
+    return report
+
+
+@app.get("/api/backtests/{run_id}/export")
+def download_backtest(run_id: str) -> Response:
+    try:
+        content = backtests.export_backtest(run_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return Response(content, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="backtest-{run_id}.zip"'})

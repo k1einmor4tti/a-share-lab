@@ -137,6 +137,7 @@ function renderDetail(payload) {
   const detail = $('#chart-side');
   detail.innerHTML = `<div class="detail-heading"><div><h3>${escapeHtml(symbol.name)}</h3><p>${escapeHtml(symbol.code)} · ${isStock ? escapeHtml(symbol.exchange) + ' · 日线' : '指数 · 日线'}</p></div>
     <span class="detail-status ${symbol.status === 'delisted' ? 'delisted' : ''}">${symbol.status === 'delisted' ? '已退市' : '本地历史'}</span></div>
+    ${isStock ? `<div class="detail-actions"><button id="detail-backtest" class="text-button">使用这只股票回测 ↗</button>${!bars.length ? '<button id="detail-priority" class="text-button">优先下载此股 ↻</button>' : ''}</div>` : ''}
     <div class="detail-meta"><span>最新收盘<strong>${format(latest?.close)}</strong></span><span>日期<strong>${escapeHtml(latest?.date || '—')}</strong></span><span>总根数<strong>${integer(payload.total_bars)}</strong></span></div>
     <div class="chart-toolbar"><div class="segmented" id="range-switch"><button data-range="1Y">近 1 年</button><button data-range="5Y">近 5 年</button><button data-range="ALL">全部</button></div>
     ${isStock ? '<div class="segmented" id="adjust-switch"><button data-adjust="qfq">前复权</button><button data-adjust="raw">未复权</button></div>' : ''}</div>
@@ -145,6 +146,13 @@ function renderDetail(payload) {
     ${!bars.length ? '<div class="empty-message">当前没有可显示的日线。全市场更新正在后台进行；失败记录可在上方查看。</div>' : ''}`;
   detail.querySelectorAll('[data-range]').forEach((button) => button.addEventListener('click', () => { state.range = button.dataset.range; updateSegments(); drawChart(); }));
   detail.querySelectorAll('[data-adjust]').forEach((button) => button.addEventListener('click', () => { state.adjustment = button.dataset.adjust; loadSelected(); }));
+  if (isStock) {
+    $('#detail-backtest').addEventListener('click', () => { $('#bt-code').value = symbol.code; showView('backtest'); });
+    if ($('#detail-priority')) $('#detail-priority').addEventListener('click', async () => {
+      try { await api(`/api/stocks/${symbol.code}/sync`, { method: 'POST' }); toast(`${symbol.code} 已加入后台优先队列。`); refreshOverview(); }
+      catch (error) { toast(error.message, true); }
+    });
+  }
   updateSegments();
   drawChart();
 }

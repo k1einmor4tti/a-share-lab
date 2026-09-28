@@ -11,6 +11,7 @@ import logging
 import sqlite3
 import threading
 import uuid
+from collections import deque
 from datetime import date
 from typing import Any
 
@@ -39,6 +40,7 @@ class MarketJobManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._priority: deque[str] = deque()
 
     def start(self, kind: str = "update") -> dict[str, Any]:
         if kind not in {"initial", "update", "retry"}:
@@ -80,6 +82,16 @@ class MarketJobManager:
             return self.start("initial" if latest is None else "retry")
         return latest
 
+    def prioritize(self, code: str) -> dict[str, Any]:
+        if db.row("SELECT code FROM symbols WHERE code=?", (code,)) is None:
+            raise ValueError(f"未知股票代码: {code}")
+        job = self.start("update")
+        with self._lock:
+            if code not in self._priority:
+                self._priority.append(code)
+        job["queued_code"] = code
+        return job
+
     def _failure(self, job_id: str, code: str, error: Exception | str, *, index: bool = False) -> None:
         message = str(error)[:1000]
         LOG.warning("Market sync failed for %s: %s", code, message)
@@ -105,6 +117,8 @@ class MarketJobManager:
             LOG.exception("Market job %s stopped unexpectedly", job_id)
             self._failure(job_id, "_job", exc)
         finally:
+            with self._lock:
+                self._priority.clear()
             counts = db.row("SELECT failed,total,done,skipped FROM jobs WHERE id=?", (job_id,))
             assert counts is not None
             source_errors = db.row("SELECT COUNT(*) AS count FROM job_failures WHERE job_id=? AND substr(code,1,1)='_'", (job_id,))
@@ -135,8 +149,18 @@ class MarketJobManager:
         symbols = db.rows("SELECT code FROM symbols ORDER BY code")
         db.execute("UPDATE jobs SET total=?,message=? WHERE id=?",
                    (len(market.INDEXES) + len(symbols), f"准备更新 {len(symbols)} 只股票", job_id))
-        for symbol in symbols:
-            code = symbol["code"]
+        pending = {symbol["code"] for symbol in symbols}
+        order = iter(symbol["code"] for symbol in symbols)
+        while pending:
+            code = None
+            with self._lock:
+                while self._priority and code is None:
+                    candidate = self._priority.popleft()
+                    if candidate in pending:
+                        code = candidate
+            if code is None:
+                code = next(candidate for candidate in order if candidate in pending)
+            pending.remove(code)
             db.execute("UPDATE jobs SET current_code=? WHERE id=?", (code, job_id))
             try:
                 result = market.sync_stock(code, target=target)

@@ -66,3 +66,28 @@ def test_duplicate_click_returns_active_job(tmp_path, monkeypatch):
     release.set()
     assert manager._thread is not None
     manager._thread.join(timeout=5)
+
+
+def test_selected_stock_runs_before_sorted_catalog(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.sqlite3")
+    db.init_db()
+    catalog.upsert_symbols([("000001", "银行", None, None), ("600000", "浦发银行", None, None)], "listed", "test")
+    monkeypatch.setattr(market, "INDEXES", {})
+    entered, release = threading.Event(), threading.Event()
+
+    def refresh():
+        entered.set()
+        assert release.wait(timeout=5)
+        return {"errors": []}
+
+    monkeypatch.setattr(catalog, "refresh_catalog", refresh)
+    calls = []
+    monkeypatch.setattr(market, "sync_stock", lambda code, target: (calls.append(code) or {"status": "updated"}))
+    manager = jobs.MarketJobManager()
+    manager.start("update")
+    assert entered.wait(timeout=5)
+    assert manager.prioritize("600000")["queued_code"] == "600000"
+    release.set()
+    assert manager._thread is not None
+    manager._thread.join(timeout=5)
+    assert calls == ["600000", "000001"]

@@ -34,7 +34,6 @@ class ExecutionOptions:
     transfer_fee_rate: float = 0.00001
     min_commission: float = 5.0
     slippage_rate: float = 0.0002
-    volume_limit_pct: float = 0.25
 
     @classmethod
     def parse(cls, supplied: dict[str, Any] | None = None) -> "ExecutionOptions":
@@ -61,8 +60,6 @@ class ExecutionOptions:
                 raise ValueError(f"{key} 范围为 0 到 0.05")
         if not 0 <= values["min_commission"] <= 100:
             raise ValueError("最低佣金范围为 0 到 100 元")
-        if not 0.01 <= values["volume_limit_pct"] <= 1:
-            raise ValueError("成交量参与率范围为 0.01 到 1")
         return cls(**values)
 
 
@@ -128,8 +125,9 @@ def run_backtest(code: str, strategy: str, params: dict[str, Any] | None = None,
     options = ExecutionOptions.parse(execution)
     module, resolved = strategies.validate_params(strategy, params)
     cutoff = market.completed_bar_cutoff().isoformat()
-    all_raw = market.read_bars(code, "raw")
-    all_qfq = market.read_bars(code, "qfq")
+    with market.symbol_lock(code):
+        all_raw = market.read_bars(code, "raw")
+        all_qfq = market.read_bars(code, "qfq")
     all_raw = all_raw[all_raw["date"] <= cutoff].reset_index(drop=True)
     all_qfq = all_qfq[all_qfq["date"] <= cutoff].reset_index(drop=True)
     if all_raw.empty or all_qfq.empty:
@@ -140,10 +138,15 @@ def run_backtest(code: str, strategy: str, params: dict[str, Any] | None = None,
         raise ValueError("开始日期不能晚于结束日期")
     raw = all_raw[(all_raw["date"] >= first) & (all_raw["date"] <= last)].reset_index(drop=True)
     adjusted = all_qfq[all_qfq["date"] <= last].reset_index(drop=True)
+    adjusted_window = adjusted[adjusted["date"] >= first]
     if raw.empty:
         raise ValueError("所选日期范围没有可用日线")
-    if set(raw["date"]) - set(adjusted["date"]):
+    if set(raw["date"]) != set(adjusted_window["date"]):
         raise ValueError("原始行情与前复权行情日期不一致，请更新后重试")
+    requested_first, requested_last = date.fromisoformat(first), date.fromisoformat(last)
+    for adjustment in ("raw", "qfq"):
+        if market.unchecked_ranges(code, adjustment, requested_first, requested_last):
+            raise ValueError(f"{code} 的 {adjustment} 日线仍有未验证日期，请更新后回测")
     if len(adjusted) < module.minimum_bars(resolved):
         raise ValueError(f"{module.name} 至少需要 {module.minimum_bars(resolved)} 根日线，当前只有 {len(adjusted)} 根")
     signal_frame, resolved = strategies.signals(strategy, adjusted, resolved)
@@ -153,6 +156,8 @@ def run_backtest(code: str, strategy: str, params: dict[str, Any] | None = None,
     benchmark = benchmark[(benchmark["date"] >= first) & (benchmark["date"] <= last)].reset_index(drop=True)
     if benchmark.empty:
         raise ValueError("沪深300基准日线尚未下载，请先更新大盘指数")
+    if market.unchecked_ranges("sh000300", "index", requested_first, requested_last):
+        raise ValueError("沪深300基准日线仍有未验证日期，请先更新指数")
 
     run_id = uuid.uuid4().hex
     directory = RESULTS_DIR / run_id
@@ -168,7 +173,12 @@ def run_backtest(code: str, strategy: str, params: dict[str, Any] | None = None,
         benchmark.to_parquet(benchmark_path, index=False, compression="zstd")
         hashes = {snapshot_path.name: _digest(snapshot_path), benchmark_path.name: _digest(benchmark_path)}
 
-        engine_frame = raw[["date", "open", "high", "low", "close", "volume"]].copy()
+        # Forward-adjusted prices include the value effect of splits/dividends.
+        # Raw fills without explicit corporate actions create false large losses.
+        engine_frame = adjusted_window[["date", "open", "high", "low", "close", "volume"]].copy()
+        engine_frame = engine_frame[engine_frame["volume"] > 0].reset_index(drop=True)
+        if len(engine_frame) < 2:
+            raise ValueError("可交易日线不足两根，无法执行回测")
         engine_frame["date"] = pd.to_datetime(engine_frame["date"]) + pd.Timedelta(hours=15)
         engine_result = akquant.run_backtest(
             data=engine_frame, strategy=_strategy_class(code, desired, options.allocation), symbols=code,
@@ -176,15 +186,18 @@ def run_backtest(code: str, strategy: str, params: dict[str, Any] | None = None,
             commission_rate=options.commission_rate, stamp_tax_rate=options.stamp_tax_rate,
             transfer_fee_rate=options.transfer_fee_rate, min_commission=options.min_commission,
             slippage={"type": "percent", "value": options.slippage_rate},
-            volume_limit_pct=options.volume_limit_pct, fill_policy=akquant.NextOpen(),
+            fill_policy=akquant.NextOpen(),
             timezone="Asia/Shanghai", show_progress=False,
         )
         equity = [{"date": timestamp.date().isoformat(), "value": float(value)}
                   for timestamp, value in engine_result.equity_curve.items()]
         benchmark_close = {str(row["date"]): float(row["close"]) for _, row in benchmark.iterrows()}
-        first_close = next(iter(benchmark_close.values()))
+        missing_benchmark = [item["date"] for item in equity if item["date"] not in benchmark_close]
+        if missing_benchmark:
+            raise ValueError(f"沪深300基准缺少 {missing_benchmark[0]} 等交易日，请先更新指数")
+        first_close = benchmark_close[equity[0]["date"]]
         benchmark_curve = [{"date": item["date"], "value": options.initial_cash * benchmark_close[item["date"]] / first_close}
-                           for item in equity if item["date"] in benchmark_close]
+                           for item in equity]
         metrics = {str(key): _safe(value) for key, value in engine_result.metrics_df["value"].items()}
         metrics["benchmark_return_pct"] = ((benchmark_curve[-1]["value"] / options.initial_cash - 1) * 100
                                             if benchmark_curve else None)
@@ -193,17 +206,20 @@ def run_backtest(code: str, strategy: str, params: dict[str, Any] | None = None,
             "strategy_name": module.name, "params": resolved, "execution": asdict(options),
             "start": first, "end": last, "actual_start": str(raw["date"].iloc[0]),
             "actual_end": str(raw["date"].iloc[-1]),
-            "adjustment": "前复权信号 + 未复权成交",
+            "adjustment": "前复权信号 + 前复权成交代理",
             "benchmark": "沪深300", "created_at": db.utc_now(),
             "versions": {"akquant": akquant.__version__, "akquant_rules": akquant.__engine_rule_version__,
                          "pandas": pd.__version__, "python": platform.python_version(),
-                         "strategy_code_sha256": hashlib.sha256(inspect.getsource(module.calculate).encode()).hexdigest(),
+                         "platform_code_sha256": hashlib.sha256((inspect.getsource(module.calculate)
+                            + inspect.getsource(strategies.signals) + inspect.getsource(_strategy_class)
+                            + inspect.getsource(run_backtest)).encode()).hexdigest(),
                          **{name: importlib.metadata.version(name) for name in ("akshare", "baostock", "pyarrow")}},
             "input_sha256": hashes, "metrics": metrics, "equity": equity,
             "benchmark_equity": benchmark_curve, "orders": _records(engine_result.orders_df),
             "trades": _records(engine_result.trades_df),
             "assumptions": ["收盘后生成信号，下一交易日开盘成交；T+1；100股整手",
-                            "停牌以缺失日线和成交量近似处理；涨跌停无法成交未逐日精确建模",
+                            "成交使用前复权价格代理公司行动后的持仓价值；绝对成交价、股数和最低佣金与真实历史交易有差异",
+                            "停牌以缺失或零成交量日线近似处理；未启用成交量参与率限制，流动性与涨跌停无法成交未逐日精确建模",
                             "费率在整个回测区间固定，不自动切换历史税率"],
             "data_sources": sorted(set(raw["source"].dropna()) | set(adjusted["source"].dropna())),
             "benchmark_coverage": {"first": str(benchmark["date"].iloc[0]),

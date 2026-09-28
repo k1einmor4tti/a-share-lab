@@ -27,7 +27,9 @@ def setup_bars(tmp_path, monkeypatch):
     })[market.BAR_COLUMNS]
     for adjustment in ("raw", "qfq"):
         market._write_bars(market.bar_path("600000", adjustment), bars)
+        market.mark_verified("600000", adjustment, days[0].date(), days[-1].date(), "synthetic")
     market._write_bars(market.bar_path("sh000300", "index", index=True), bars)
+    market.mark_verified("sh000300", "index", days[0].date(), days[-1].date(), "synthetic")
     return bars
 
 
@@ -73,3 +75,47 @@ def test_backtest_explains_missing_local_data(tmp_path, monkeypatch):
     catalog.upsert_symbols([("600000", "测试股票", None, None)], "listed", "test")
     with pytest.raises(ValueError, match="请先更新该股票"):
         backtests.run_backtest("600000", "buy_hold")
+
+
+def test_split_does_not_create_false_equity_crash(tmp_path, monkeypatch):
+    bars = setup_bars(tmp_path, monkeypatch)
+    raw = bars.copy()
+    adjusted = bars.copy()
+    for column in ("open", "high", "low", "close"):
+        raw.loc[40:, column] *= .5
+        adjusted.loc[:39, column] *= .5
+    market._write_bars(market.bar_path("600000", "raw"), raw)
+    market._write_bars(market.bar_path("600000", "qfq"), adjusted)
+    report = backtests.run_backtest("600000", "buy_hold")
+    assert report["metrics"]["total_return_pct"] > -10
+    assert "前复权成交代理" in report["adjustment"]
+
+
+def test_missing_interior_session_blocks_backtest(tmp_path, monkeypatch):
+    bars = setup_bars(tmp_path, monkeypatch)
+    missing = bars.loc[20, "date"]
+    incomplete = bars[bars["date"] != missing]
+    for adjustment in ("raw", "qfq"):
+        market._write_bars(market.bar_path("600000", adjustment), incomplete)
+        db.execute("DELETE FROM coverage WHERE code=? AND adjustment=?", ("600000", adjustment))
+        market.mark_verified("600000", adjustment, date.fromisoformat(bars.loc[0, "date"]),
+                             date.fromisoformat(bars.loc[19, "date"]), "synthetic")
+        market.mark_verified("600000", adjustment, date.fromisoformat(bars.loc[21, "date"]),
+                             date.fromisoformat(bars.iloc[-1]["date"]), "synthetic")
+    with pytest.raises(ValueError, match="未验证日期"):
+        backtests.run_backtest("600000", "buy_hold")
+
+
+def test_benchmark_aligns_to_first_stock_session_and_requires_full_tail(tmp_path, monkeypatch):
+    bars = setup_bars(tmp_path, monkeypatch)
+    first_stock_day = bars.loc[5, "date"]
+    stock = bars[bars["date"] >= first_stock_day]
+    for adjustment in ("raw", "qfq"):
+        market._write_bars(market.bar_path("600000", adjustment), stock)
+    report = backtests.run_backtest("600000", "buy_hold", start=bars.loc[0, "date"])
+    assert report["benchmark_equity"][0]["date"] == first_stock_day
+    assert report["benchmark_equity"][0]["value"] == 100_000
+    stale_index = bars.iloc[:-1]
+    market._write_bars(market.bar_path("sh000300", "index", index=True), stale_index)
+    with pytest.raises(ValueError, match="基准缺少"):
+        backtests.run_backtest("600000", "buy_hold", start=bars.loc[0, "date"])

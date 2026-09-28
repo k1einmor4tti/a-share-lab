@@ -30,6 +30,8 @@ BAR_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount", "turn
 _EASTMONEY_LOCK = threading.Lock()
 _EASTMONEY_BLOCKED_UNTIL = 0.0
 _EASTMONEY_NEXT_REQUEST = 0.0
+_SYMBOL_LOCKS: dict[str, threading.RLock] = {}
+_SYMBOL_LOCKS_GUARD = threading.Lock()
 
 
 def history_start() -> date:
@@ -349,7 +351,18 @@ def _record_symbol_metadata(code: str) -> dict[str, object]:
     return {"code": code, "bars": len(raw), "adjusted_bars": len(adjusted), "source": summary}
 
 
+def symbol_lock(code: str) -> threading.RLock:
+    """Serialize an individual symbol's two-file update with snapshot reads."""
+    with _SYMBOL_LOCKS_GUARD:
+        return _SYMBOL_LOCKS.setdefault(code, threading.RLock())
+
+
 def sync_stock(code: str, *, target: date | None = None) -> dict[str, object]:
+    with symbol_lock(code):
+        return _sync_stock_locked(code, target=target)
+
+
+def _sync_stock_locked(code: str, *, target: date | None = None) -> dict[str, object]:
     symbol = row("SELECT * FROM symbols WHERE code=?", (code,))
     if not symbol:
         raise ValueError(f"未知股票代码: {code}")

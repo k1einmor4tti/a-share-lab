@@ -1,0 +1,9 @@
+akquant>=0.3.64,<0.4
+akshare>=1.18.97,<1.19
+fastapi>=0.141,<1
+uvicorn>=0.54,<1
+python-multipart>=0.0.32,<1
+pandas>=2.2,<4
+pyarrow>=14,<26
+requests>=2.34,<3
+baostock>=0.8.9,<1

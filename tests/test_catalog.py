@@ -30,7 +30,6 @@ def test_catalog_seed_refresh_and_delisted_search(tmp_path, monkeypatch):
         {"公司代码": "600000", "公司简称": "旧名", "上市日期": "1998-01-22", "暂停上市日期": "2009-12-29"},
     ]))
     monkeypatch.setattr(catalog.ak, "stock_info_sz_delist", lambda **_: pd.DataFrame())
-    monkeypatch.setattr(catalog.ak, "stock_zh_a_stop_em", lambda: pd.DataFrame())
     report = catalog.refresh_catalog()
     assert not report["errors"]
     assert report["total"] == 3
@@ -38,6 +37,11 @@ def test_catalog_seed_refresh_and_delisted_search(tmp_path, monkeypatch):
     assert db.row("SELECT status FROM symbols WHERE code='600001'")["status"] == "delisted"
     assert catalog.search_symbols("退市")[0]["code"] == "600001"
     assert catalog.search_symbols("301")[0]["code"] == "301001"
+    catalog.upsert_symbols([("600001", "重新上市", None, None)], "listed", "test")
+    assert db.row("SELECT status,delisting_date FROM symbols WHERE code='600001'") == {
+        "status": "listed", "delisting_date": None,
+    }
+    assert not catalog.is_a_share("400001")
 
 
 def test_catalog_keeps_seed_when_remote_fails(tmp_path, monkeypatch):
@@ -52,7 +56,6 @@ def test_catalog_keeps_seed_when_remote_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(catalog, "_eastmoney_active", fail)
     monkeypatch.setattr(catalog.ak, "stock_info_sh_delist", fail)
     monkeypatch.setattr(catalog.ak, "stock_info_sz_delist", fail)
-    monkeypatch.setattr(catalog.ak, "stock_zh_a_stop_em", fail)
     report = catalog.refresh_catalog()
-    assert len(report["errors"]) == 5
+    assert len(report["errors"]) == 4
     assert catalog.search_symbols("000001")[0]["name"] == "平安银行"

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 import pandas as pd
+import pytest
 
 from app import catalog, db, market
 
@@ -82,3 +83,60 @@ def test_adjustment_rebase_replaces_old_prices(tmp_path, monkeypatch):
     assert outcome["rebased"] is True
     assert market.read_bars("600000", "qfq")["close"].iloc[0] == 9.0
     assert market.verified_intervals("600000", "qfq") == [(date(2026, 9, 16), date(2026, 9, 21))]
+
+
+def test_delayed_close_is_retried_on_second_update(tmp_path, monkeypatch):
+    setup_market(tmp_path, monkeypatch, date(2026, 9, 20))
+    available = {"today": False}
+
+    def fetch(_code, first, last, _adjustment):
+        if first == date(2026, 9, 21) and not available["today"]:
+            return pd.DataFrame(columns=market.BAR_COLUMNS), "东方财富"
+        return sample_bars(first, last), "东方财富"
+
+    monkeypatch.setattr(market, "fetch_stock", fetch)
+    market.sync_stock("600000")
+    monkeypatch.setattr(market, "completed_bar_cutoff", lambda: date(2026, 9, 21))
+    market.sync_stock("600000")
+    assert market.unchecked_ranges("600000", "raw", date(2026, 9, 21), date(2026, 9, 21))
+    available["today"] = True
+    result = market.sync_stock("600000")
+    assert result["new_bars"] == 1
+    assert market.unchecked_ranges("600000", "raw", date(2026, 9, 21), date(2026, 9, 21)) == []
+
+
+def test_suspended_day_requires_second_source_confirmation(tmp_path, monkeypatch):
+    setup_market(tmp_path, monkeypatch, date(2026, 9, 21))
+    index = sample_bars(date(2026, 9, 16), date(2026, 9, 21))
+    market._write_bars(market.bar_path("sh000001", "index", index=True), index)
+
+    def fetch(_code, first, last, _adjustment):
+        frame = sample_bars(first, last)
+        return frame[frame["date"] != "2026-09-18"], "东方财富"
+
+    monkeypatch.setattr(market, "fetch_stock", fetch)
+    monkeypatch.setattr(market, "_baostock_stock", lambda *_: pd.DataFrame(columns=market.BAR_COLUMNS))
+    market.sync_stock("600000")
+    assert market.unchecked_ranges("600000", "raw", date(2026, 9, 16), date(2026, 9, 21)) == []
+    assert "2026-09-18" not in set(market.read_bars("600000", "raw")["date"])
+
+
+def test_truncated_rebase_does_not_replace_saved_history(tmp_path, monkeypatch):
+    setup_market(tmp_path, monkeypatch, date(2026, 9, 20))
+    changed = {"value": False}
+
+    def fetch(_code, first, last, adjustment):
+        if changed["value"] and adjustment == "qfq":
+            if first == date(2026, 9, 16) and last == date(2026, 9, 21):
+                return sample_bars(date(2026, 9, 20), last, close=9.0), "东方财富"
+            return sample_bars(first, last, close=9.0), "东方财富"
+        return sample_bars(first, last), "东方财富"
+
+    monkeypatch.setattr(market, "fetch_stock", fetch)
+    market.sync_stock("600000")
+    old = market.read_bars("600000", "qfq").copy()
+    changed["value"] = True
+    monkeypatch.setattr(market, "completed_bar_cutoff", lambda: date(2026, 9, 21))
+    with pytest.raises(RuntimeError, match="只返回部分历史"):
+        market.sync_stock("600000")
+    pd.testing.assert_frame_equal(market.read_bars("600000", "qfq"), old)

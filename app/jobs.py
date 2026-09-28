@@ -74,7 +74,7 @@ class MarketJobManager:
         """Call once during web startup, after SQLite has been initialized."""
         catalog.seed_catalog()
         latest = latest_job()
-        if latest is None or latest["status"] == "interrupted":
+        if latest is None or latest["status"] in {"interrupted", "partial"}:
             return self.start("initial" if latest is None else "retry")
         return latest
 

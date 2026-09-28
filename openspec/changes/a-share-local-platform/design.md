@@ -29,7 +29,7 @@ Store each symbol's raw and forward-adjusted bars in compressed Parquet, retaini
 
 ### Source and adjustment policy
 
-Use Eastmoney via AKShare first. Try BaoStock for unavailable stock histories and label the result on each bar or contiguous source range. Normal updates request unchecked ranges after the last verified date and any failed interior intervals. Compare an old adjusted anchor with the current source; when it changes, re-fetch that adjusted series. Exclude today's bar until after the close in Asia/Shanghai. Delisted catalogs are assembled from current stocks plus available Shanghai, Shenzhen and Eastmoney delisting lists; report coverage gaps rather than implying completeness.
+Use Eastmoney daily interfaces first. Try BaoStock for unavailable Shanghai and Shenzhen stock histories and label the result on each bar. Beijing histories currently depend on Eastmoney; any failure must remain visible rather than counted as covered. Normal updates request unchecked ranges after the last verified date and failed interior intervals. Verify returned trading dates against the cached index calendar, and confirm an older apparent suspension with a second source before recording an empty date as covered. Always leave an absent current-day close open for another update. Compare an old adjusted anchor with the current source; when it changes, re-fetch that adjusted series only if every previously saved trading date remains present. Exclude today's bar until after the close in Asia/Shanghai. Delisted catalogs are assembled from BaoStock and available Shanghai and Shenzhen delisting lists; report coverage gaps rather than implying completeness.
 
 ### Simulation contract
 

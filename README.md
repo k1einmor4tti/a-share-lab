@@ -17,3 +17,6 @@ The initial OpenSpec proposal is complete. Application code is being implemented
 
 This is research software. Backtest results depend on data coverage and stated execution assumptions.
 
+## Public-data coverage
+
+Eastmoney is the primary daily-bar source. BaoStock can fill Shanghai and Shenzhen bars and provide a delisted-stock catalog. Beijing bars currently depend on Eastmoney; if that endpoint fails, the affected symbols remain marked as failed for a later retry. The app records actual dates and sources and does not assume that every delisted security has a public 20-year history.

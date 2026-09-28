@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 import uuid
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -24,6 +27,9 @@ INDEXES = {
     "sh000905": "中证500",
 }
 BAR_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount", "turnover", "source"]
+_EASTMONEY_LOCK = threading.Lock()
+_EASTMONEY_BLOCKED_UNTIL = 0.0
+_EASTMONEY_NEXT_REQUEST = 0.0
 
 
 def history_start() -> date:
@@ -123,6 +129,14 @@ def _baostock_stock(code: str, start: date, end: date, adjustment: str) -> pd.Da
 
 def _eastmoney_history(secid: str, start: date, end: date, adjustment: str) -> pd.DataFrame:
     """Use Eastmoney directly because the host's optional proxy breaks AKShare's session."""
+    global _EASTMONEY_BLOCKED_UNTIL, _EASTMONEY_NEXT_REQUEST
+    with _EASTMONEY_LOCK:
+        now = time.monotonic()
+        if now < _EASTMONEY_BLOCKED_UNTIL:
+            raise RuntimeError("东方财富暂时不可用，等待重试窗口")
+        if now < _EASTMONEY_NEXT_REQUEST:
+            time.sleep(_EASTMONEY_NEXT_REQUEST - now)
+        _EASTMONEY_NEXT_REQUEST = time.monotonic() + 0.25
     params = {
         "secid": secid, "fields1": "f1,f2,f3,f4,f5,f6",
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
@@ -148,11 +162,15 @@ def _eastmoney_history(secid: str, start: date, end: date, adjustment: str) -> p
                     raise ValueError("Eastmoney returned an incomplete kline")
                 frame = pd.DataFrame(values, columns=["date", "open", "close", "high", "low", "volume",
                                                       "amount", "amplitude", "pct_change", "change", "turnover"])
+                with _EASTMONEY_LOCK:
+                    _EASTMONEY_BLOCKED_UNTIL = 0.0
                 return normalize_bars(frame, "东方财富")
             except (requests.RequestException, ValueError, RuntimeError) as exc:
                 errors.append(f"{host}: {exc}")
     finally:
         session.close()
+    with _EASTMONEY_LOCK:
+        _EASTMONEY_BLOCKED_UNTIL = time.monotonic() + 300
     raise RuntimeError("; ".join(errors)[:1000])
 
 
@@ -175,8 +193,6 @@ def fetch_stock(code: str, start: date, end: date, adjustment: str) -> tuple[pd.
         if empty_primary:
             return fallback, "东方财富"
     except Exception as exc:
-        if empty_primary:
-            return pd.DataFrame(columns=BAR_COLUMNS), "东方财富"
         errors.append(f"BaoStock: {exc}")
     raise RuntimeError("; ".join(errors)[:1000])
 
@@ -245,6 +261,77 @@ def mark_verified(code: str, adjustment: str, start: date, end: date, source: st
             (code, adjustment, start.isoformat(), end.isoformat(), source, utc_now()))
 
 
+def _expected_sessions(first: date, last: date) -> set[date]:
+    """Use cached Shanghai closes as the calendar, with a conservative tail."""
+    path = bar_path("sh000001", "index", index=True)
+    index_dates = _index_calendar(str(path), path.stat().st_mtime_ns) if path.exists() else ()
+    if index_dates:
+        known = {value for value in index_dates if first <= value <= last}
+        first_known = index_dates[0]
+        last_known = index_dates[-1]
+        if first >= first_known:
+            cursor = max(first, last_known + timedelta(days=1))
+            while cursor <= last:
+                if cursor.weekday() < 5:
+                    known.add(cursor)
+                cursor += timedelta(days=1)
+            return known
+    return {day.date() for day in pd.date_range(first, last, freq="B")}
+
+
+@lru_cache(maxsize=8)
+def _index_calendar(path: str, modified_ns: int) -> tuple[date, ...]:
+    del modified_ns  # The modification time is part of the cache key.
+    frame = pd.read_parquet(path, columns=["date"])
+    return tuple(date.fromisoformat(str(value)) for value in frame["date"])
+
+
+def _confirmed_intervals(first: date, last: date, observed: set[date],
+                         absent_confirmed: set[date] | None = None,
+                         expected_override: set[date] | None = None) -> list[tuple[date, date]]:
+    """Only mark observed sessions or independently confirmed suspensions."""
+    expected = expected_override if expected_override is not None else _expected_sessions(first, last)
+    confirmed = observed | (absent_confirmed or set())
+    result: list[tuple[date, date]] = []
+    begin: date | None = None
+    cursor = first
+    while cursor <= last:
+        covered = cursor not in expected or cursor in confirmed
+        if covered and begin is None:
+            begin = cursor
+        elif not covered and begin is not None:
+            result.append((begin, cursor - timedelta(days=1)))
+            begin = None
+        cursor += timedelta(days=1)
+    if begin is not None:
+        result.append((begin, last))
+    return result
+
+
+def _bar_dates(frame: pd.DataFrame) -> set[date]:
+    return {date.fromisoformat(str(value)) for value in frame["date"]}
+
+
+def _confirm_absences(code: str, adjustment: str, missing: set[date],
+                      primary_source: str, cutoff: date) -> tuple[pd.DataFrame, set[date]]:
+    """Check past missing trading dates against a second provider in batches.
+
+    A missing current-day close is always left open for another Update click.
+    """
+    if primary_source != "东方财富" or exchange_of(code) == "BJ":
+        return pd.DataFrame(columns=BAR_COLUMNS), set()
+    candidates = sorted(day for day in missing if day < cutoff)
+    if not candidates:
+        return pd.DataFrame(columns=BAR_COLUMNS), set()
+    try:
+        other = _baostock_stock(code, candidates[0], candidates[-1], adjustment)
+    except Exception as exc:
+        LOG.warning("Could not confirm missing sessions for %s: %s", code, exc)
+        return pd.DataFrame(columns=BAR_COLUMNS), set()
+    observed = {date.fromisoformat(str(value)) for value in other["date"]}
+    return other, set(candidates) - observed
+
+
 def _record_symbol_metadata(code: str) -> dict[str, object]:
     raw = read_bars(code, "raw")
     adjusted = read_bars(code, "qfq")
@@ -283,10 +370,19 @@ def sync_stock(code: str, *, target: date | None = None) -> dict[str, object]:
         staged[adjustment] = read_bars(code, adjustment)
         for first, last in missing[adjustment]:
             frame, source = fetch_stock(code, first, last, adjustment)
-            if frame.empty and staged[adjustment].empty:
+            expected = _expected_sessions(first, last)
+            absent = expected - _bar_dates(frame)
+            supplemental, confirmed_absent = _confirm_absences(code, adjustment, absent, source, cutoff)
+            if not supplemental.empty:
+                supplemental = supplemental[supplemental["date"].isin({day.isoformat() for day in absent})]
+            if frame.empty and supplemental.empty and staged[adjustment].empty:
                 raise RuntimeError(f"{source} 未返回 {adjustment} 历史行情")
             staged[adjustment] = _merge(staged[adjustment], frame)
-            checked.append((adjustment, first, last, source))
+            staged[adjustment] = _merge(staged[adjustment], supplemental)
+            observed = _bar_dates(frame) | _bar_dates(supplemental)
+            label = source + ("+BaoStock" if confirmed_absent else "")
+            for covered_first, covered_last in _confirmed_intervals(first, last, observed, confirmed_absent, expected):
+                checked.append((adjustment, covered_first, covered_last, label))
 
     # A corporate action can rebase every prior qfq price. Recheck the earliest
     # stored close and replace the adjusted series if its value has changed.
@@ -303,8 +399,13 @@ def sync_stock(code: str, *, target: date | None = None) -> dict[str, object]:
         replacement, source = fetch_stock(code, start, cutoff, "qfq")
         if replacement.empty:
             raise RuntimeError("复权价格变化后重拉失败")
+        if not _bar_dates(prior_adjusted).issubset(_bar_dates(replacement)):
+            raise RuntimeError("复权重拉只返回部分历史，保留旧数据等待重试")
         staged["qfq"] = replacement
-        checked = [item for item in checked if item[0] != "qfq"] + [("qfq", start, cutoff, source)]
+        expected = _expected_sessions(start, cutoff)
+        covered = _confirmed_intervals(start, cutoff, _bar_dates(replacement), expected_override=expected)
+        checked = [item for item in checked if item[0] != "qfq"] + [
+            ("qfq", first, last, source) for first, last in covered]
 
     for adjustment, frame in staged.items():
         if not frame.empty:
@@ -335,7 +436,13 @@ def sync_index(code: str, *, target: date | None = None) -> dict[str, object]:
         if frame.empty and staged.empty:
             raise RuntimeError("指数接口未返回历史行情")
         staged = _merge(staged, frame)
-        checked.append((first, last, source))
+        observed = _bar_dates(frame)
+        # The exchange index itself defines historical sessions. Only its
+        # unreturned, recent weekday tail is left open for a later update.
+        latest = max(observed) if observed else first - timedelta(days=1)
+        expected = observed | {day.date() for day in pd.date_range(max(first, latest + timedelta(days=1)), last, freq="B")}
+        checked.extend((covered_first, covered_last, source) for covered_first, covered_last
+                       in _confirmed_intervals(first, last, observed, expected_override=expected))
     _write_bars(bar_path(code, "index", index=True), staged)
     for first, last, source in checked:
         mark_verified(code, "index", first, last, source)

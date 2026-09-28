@@ -28,7 +28,7 @@ def normalize_code(value: object) -> str | None:
 
 def is_a_share(code: str | None) -> bool:
     return bool(code and len(code) == 6 and code.isdigit()
-                and code[0] in "036489" and not code.startswith(("200", "900")))
+                and code[0] in "036489" and not code.startswith(("200", "900", "400")))
 
 
 def exchange_of(code: str) -> str:
@@ -74,7 +74,8 @@ def upsert_symbols(items: list[tuple[str, str, str | None, str | None]], status:
                    ON CONFLICT(code) DO UPDATE SET
                    name=excluded.name, exchange=excluded.exchange, status=excluded.status,
                    listing_date=COALESCE(excluded.listing_date,symbols.listing_date),
-                   delisting_date=COALESCE(excluded.delisting_date,symbols.delisting_date),
+                   delisting_date=CASE WHEN excluded.status='listed' THEN NULL
+                                       ELSE COALESCE(excluded.delisting_date,symbols.delisting_date) END,
                    catalog_source=excluded.catalog_source""",
                 (code, (name or code).strip() or code, exchange_of(code), status,
                  listing_date, delisting_date, source),
@@ -214,7 +215,6 @@ def refresh_catalog() -> dict[str, Any]:
     sources: tuple[tuple[str, Callable[[], pd.DataFrame]], ...] = (
         ("上交所退市名单", lambda: ak.stock_info_sh_delist(symbol="全部")),
         ("深交所退市名单", lambda: ak.stock_info_sz_delist(symbol="终止上市公司")),
-        ("东方财富退市名单", ak.stock_zh_a_stop_em),
     )
     for label, fetch in sources:
         try:

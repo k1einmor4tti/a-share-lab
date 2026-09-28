@@ -19,12 +19,14 @@ from . import catalog, db, market
 LOG = logging.getLogger(__name__)
 
 
-def job_details(job_id: str) -> dict[str, Any] | None:
+def job_details(job_id: str, failure_limit: int = 100) -> dict[str, Any] | None:
     job = db.row("SELECT * FROM jobs WHERE id=?", (job_id,))
     if job is None:
         return None
     job["failures"] = db.rows(
-        "SELECT code,error FROM job_failures WHERE job_id=? ORDER BY code", (job_id,))
+        "SELECT code,error FROM job_failures WHERE job_id=? ORDER BY code LIMIT ?", (job_id, failure_limit))
+    job["failure_count"] = db.row(
+        "SELECT COUNT(*) AS count FROM job_failures WHERE job_id=?", (job_id,))["count"]
     return job
 
 

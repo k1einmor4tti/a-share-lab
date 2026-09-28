@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>A Share Lab · A 股量化研究台</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="A Share Lab 首页"><span class="brand-mark">A<span>·</span></span><span><strong>A SHARE LAB</strong><small>本地量化研究台</small></span></a>
+      <div class="side-label">工作空间</div>
+      <nav class="navigation" aria-label="主导航">
+        <button class="nav-item active" data-view="market"><span class="nav-icon">◫</span> 市场总览</button>
+        <button class="nav-item" data-view="backtest"><span class="nav-icon">⌁</span> 策略回测</button>
+        <button class="nav-item" data-view="assistant"><span class="nav-icon">✳</span> 策略助手</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <span class="status-dot"></span><span>仅在本机运行</span>
+        <small>东方财富 · BaoStock · AKQuant</small>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="breadcrumb">研究工作台 <span>/</span> <strong id="page-name">市场总览</strong></div>
+        <div class="topbar-right"><span class="date-label" id="market-date">交易日加载中</span><span class="local-pill"><span class="status-dot"></span>LOCAL</span></div>
+      </header>
+
+      <section class="view active" id="view-market">
+        <div class="page-heading">
+          <div><p class="eyebrow">MARKET OVERVIEW</p><h1>读懂市场，从数据开始。</h1><p class="subhead">沪深京 A 股日线行情、历史走势与数据覆盖情况，集中在一处。</p></div>
+          <button class="primary-button" id="update-button"><span>↻</span> 更新全市场数据</button>
+        </div>
+
+        <div class="section-heading"><div><p class="eyebrow">INDICES</p><h2>核心指数</h2></div><span class="muted">最近完成的收盘日线</span></div>
+        <div class="index-grid" id="index-grid"><div class="loading-card">正在读取指数…</div></div>
+
+        <div class="overview-grid">
+          <section class="panel sync-panel">
+            <div class="panel-heading"><div><p class="eyebrow">DATA SYNC</p><h2>市场数据覆盖</h2></div><span class="chip" id="job-chip">待检查</span></div>
+            <div class="coverage-stat"><strong id="coverage-count">—</strong><span>/ <span id="catalog-total">—</span> 只股票已有日线</span></div>
+            <div class="progress-track" role="progressbar" aria-label="股票数据覆盖" aria-valuemin="0" aria-valuemax="100"><div id="coverage-fill"></div></div>
+            <div class="mini-stats"><div><strong id="listed-count">—</strong><span>在市股票</span></div><div><strong id="delisted-count">—</strong><span>退市记录</span></div><div><strong id="failed-count">—</strong><span>更新失败</span></div></div>
+            <div class="sync-note" id="job-note">首次打开后会在后台建立市场目录并下载历史数据。</div>
+            <details class="failure-details" id="failure-details"><summary>查看最近失败记录</summary><div id="failure-list"></div></details>
+          </section>
+          <section class="panel guide-panel">
+            <div><p class="eyebrow">RESEARCH FLOW</p><h2>从一只股票开始</h2><p>搜索股票代码或名称，查看最近 20 年可获得的历史行情，再选择策略模块进行回测。</p></div>
+            <div class="flow-steps"><div><span>01</span> 搜索标的</div><div><span>02</span> 核查历史</div><div><span>03</span> 运行策略</div></div>
+            <button class="text-button" id="jump-search">前往股票搜索 <span>↗</span></button>
+          </section>
+        </div>
+
+        <section class="panel explorer" id="stock-explorer">
+          <div class="panel-heading"><div><p class="eyebrow">STOCK EXPLORER</p><h2>股票与历史行情</h2></div><span class="muted">按代码或名称搜索</span></div>
+          <div class="search-box"><span>⌕</span><input id="stock-search" type="search" placeholder="例如：600519、贵州茅台、平安银行" autocomplete="off" aria-label="搜索股票"><kbd>↵</kbd></div>
+          <div class="explorer-grid">
+            <div class="search-results"><div class="results-heading"><span>股票目录</span><span id="results-count">—</span></div><div id="stock-results" class="results-list"><div class="empty-message">输入代码或名称开始搜索。</div></div></div>
+            <div class="chart-side" id="chart-side"><div class="empty-chart"><div class="empty-symbol">⌁</div><strong>选择一只股票</strong><span>历史价格、日期范围和数据来源将在这里显示。</span></div></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-backtest"><div class="page-heading"><div><p class="eyebrow">BACKTEST STUDIO</p><h1>把想法放进历史。</h1><p class="subhead">选择策略模块和股票代码，检查它曾如何表现。</p></div></div><div id="backtest-root" class="panel coming-soon">策略工作台加载中…</div></section>
+      <section class="view" id="view-assistant"><div class="page-heading"><div><p class="eyebrow">STRATEGY ASSISTANT</p><h1>让策略说明更清楚。</h1><p class="subhead">导入 SKILL.md 作为参考，连接本机 DSH 讨论参数与策略。</p></div></div><div id="assistant-root" class="panel coming-soon">策略助手加载中…</div></section>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

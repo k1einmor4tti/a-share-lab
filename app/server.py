@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import backtests, catalog, db, jobs, market, strategies
+from . import assistant, backtests, catalog, db, jobs, market, skills, strategies
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
@@ -170,3 +170,55 @@ def download_backtest(run_id: str) -> Response:
         raise HTTPException(404, str(exc)) from exc
     return Response(content, media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="backtest-{run_id}.zip"'})
+
+
+class SkillFilesRequest(BaseModel):
+    files: list[dict[str, Any]]
+    source: str = "本地目录"
+
+
+class GithubSkillRequest(BaseModel):
+    url: str
+
+
+class AssistantRequest(BaseModel):
+    question: str
+    skill_ids: list[str] = Field(default_factory=list)
+
+
+@app.get("/api/skills")
+def skill_list() -> dict[str, Any]:
+    return {"items": skills.list_skills()}
+
+
+@app.post("/api/skills/local")
+def import_local_skill(request: SkillFilesRequest) -> dict[str, Any]:
+    try:
+        return {"items": skills.import_files(request.files, request.source)}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/skills/github")
+def import_github_skill(request: GithubSkillRequest) -> dict[str, Any]:
+    try:
+        return {"items": skills.import_github(request.url)}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"GitHub 下载失败：{exc}") from exc
+
+
+@app.get("/api/assistant/status")
+def assistant_status() -> dict[str, Any]:
+    return assistant.status()
+
+
+@app.post("/api/assistant/chat")
+def assistant_chat(request: AssistantRequest) -> dict[str, Any]:
+    try:
+        return assistant.ask(request.question, request.skill_ids)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except assistant.AssistantError as exc:
+        raise HTTPException(503, str(exc)) from exc

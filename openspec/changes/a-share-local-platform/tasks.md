@@ -13,7 +13,7 @@
 ## 3. Strategy backtesting
 
 - [x] 3.1 Implement five registered single-stock strategy modules and parameter schemas; commit.
-- [ ] 3.2 Integrate AKQuant with A-share execution settings, benchmark, immutable input snapshots, saved result and exports; verify against synthetic and real daily bars; commit.
+- [x] 3.2 Integrate AKQuant with A-share execution settings, benchmark, immutable input snapshots, saved result and exports; verify against synthetic and real daily bars; commit.
 - [ ] 3.3 Have a sub-agent review phase 3 execution correctness and provenance; commit fixes separately.
 
 ## 4. Local web and assistant

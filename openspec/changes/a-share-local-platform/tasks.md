@@ -25,5 +25,5 @@
 
 ## 5. End-to-end delivery
 
-- [ ] 5.1 Verify clean setup, localhost launch, real stock and index fetch, incremental update, all five strategies, skill import and DSH failure handling; commit documentation and corrections.
+- [x] 5.1 Verify clean setup, localhost launch, real stock and index fetch, incremental update, all five strategies, skill import and DSH failure handling; commit documentation and corrections.
 - [ ] 5.2 Have a sub-agent review the release candidate; commit corrections separately, push main, and report remaining public-data coverage limits.

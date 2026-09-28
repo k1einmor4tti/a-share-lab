@@ -5,7 +5,7 @@
 
 ## 2. Market data
 
-- [ ] 2.1 Implement the current and delisted stock catalog with local search and source labeling; verify representative codes; commit.
+- [x] 2.1 Implement the current and delisted stock catalog with local search and source labeling; verify representative codes; commit.
 - [ ] 2.2 Implement raw and adjusted stock and index daily Parquet storage with verified coverage ranges, interior-gap repair, per-bar provenance and rebase detection; verify initial and gap updates; commit.
 - [ ] 2.3 Implement resumable full-market background jobs, progress, failure reporting and retry; commit.
 - [ ] 2.4 Have a sub-agent review phase 2 data behavior and coverage claims; commit fixes separately.

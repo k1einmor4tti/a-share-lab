@@ -19,10 +19,12 @@ def test_catalog_seed_refresh_and_delisted_search(tmp_path, monkeypatch):
     assert catalog.seed_catalog() == 1
     assert db.row("SELECT listing_date FROM symbols WHERE code='600000'")["listing_date"] == "1999-11-10"
 
-    monkeypatch.setattr(catalog.ak, "stock_zh_a_spot_em", lambda: pd.DataFrame([
-        {"代码": "600000", "名称": "浦发银行"},
-        {"代码": "301001", "名称": "测试科技"},
-    ]))
+    monkeypatch.setattr(catalog, "_baostock_universe", lambda: (
+        [("600000", "浦发银行", "1999-11-10", None)], []))
+    monkeypatch.setattr(catalog, "_eastmoney_active", lambda: [
+        ("600000", "浦发银行", "1999-11-10", None),
+        ("301001", "测试科技", "2021-01-01", None),
+    ])
     monkeypatch.setattr(catalog.ak, "stock_info_sh_delist", lambda **_: pd.DataFrame([
         {"公司代码": "600001", "公司简称": "已退市", "上市日期": "1998-01-22", "暂停上市日期": "2009-12-29"},
         {"公司代码": "600000", "公司简称": "旧名", "上市日期": "1998-01-22", "暂停上市日期": "2009-12-29"},
@@ -46,10 +48,11 @@ def test_catalog_keeps_seed_when_remote_fails(tmp_path, monkeypatch):
     def fail(*_args, **_kwargs):
         raise ConnectionError("offline")
 
-    monkeypatch.setattr(catalog.ak, "stock_zh_a_spot_em", fail)
+    monkeypatch.setattr(catalog, "_baostock_universe", fail)
+    monkeypatch.setattr(catalog, "_eastmoney_active", fail)
     monkeypatch.setattr(catalog.ak, "stock_info_sh_delist", fail)
     monkeypatch.setattr(catalog.ak, "stock_info_sz_delist", fail)
     monkeypatch.setattr(catalog.ak, "stock_zh_a_stop_em", fail)
     report = catalog.refresh_catalog()
-    assert len(report["errors"]) == 4
+    assert len(report["errors"]) == 5
     assert catalog.search_symbols("000001")[0]["name"] == "平安银行"

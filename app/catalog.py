@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from datetime import date, datetime
 from typing import Any, Callable
 
 import akshare as ak
 import pandas as pd
+import requests
 
 from .config import SEED_LIST
 from .db import connection, row, rows
@@ -119,23 +121,95 @@ def _delist_items(df: pd.DataFrame, label: str) -> list[tuple[str, str, str | No
     return result
 
 
+def _eastmoney_active() -> list[tuple[str, str, str | None, str | None]]:
+    params = {
+        "pn": 1, "pz": 500, "po": 1, "np": 1,
+        "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fltt": 2, "invt": 2,
+        "fid": "f12", "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048",
+        "fields": "f12,f14,f26",
+    }
+    session = requests.Session()
+    session.trust_env = False
+    result = []
+    try:
+        while True:
+            errors = []
+            payload = None
+            for host in ("82.push2.eastmoney.com", "push2.eastmoney.com"):
+                try:
+                    response = session.get(f"https://{host}/api/qt/clist/get", params=params,
+                                           headers={"User-Agent": "Mozilla/5.0"}, timeout=(5, 12))
+                    response.raise_for_status()
+                    payload = response.json()
+                    if payload.get("rc") != 0:
+                        raise ValueError(f"Eastmoney rc={payload.get('rc')}")
+                    break
+                except (requests.RequestException, ValueError) as exc:
+                    errors.append(str(exc))
+            if payload is None:
+                raise RuntimeError("; ".join(errors)[:500])
+            data = payload.get("data") or {}
+            for entry in data.get("diff") or []:
+                code = normalize_code(entry.get("f12"))
+                if is_a_share(code):
+                    result.append((code, str(entry.get("f14") or code), date_text(entry.get("f26")), None))
+            if params["pn"] * params["pz"] >= int(data.get("total") or 0):
+                break
+            params["pn"] += 1
+            time.sleep(0.35)
+    finally:
+        session.close()
+    if not result:
+        raise RuntimeError("东方财富股票清单为空")
+    return result
+
+
+def _baostock_universe() -> tuple[list[tuple[str, str, str | None, str | None]], list[tuple[str, str, str | None, str | None]]]:
+    import baostock as bs
+
+    login = bs.login()
+    if login.error_code != "0":
+        raise RuntimeError(login.error_msg)
+    try:
+        response = bs.query_stock_basic()
+        if response.error_code != "0":
+            raise RuntimeError(response.error_msg)
+        active, delisted = [], []
+        while response.next():
+            code_raw, name, listed, out, kind, status = response.get_row_data()
+            if kind != "1":
+                continue
+            code = normalize_code(code_raw)
+            if not is_a_share(code):
+                continue
+            item = (code, name, date_text(listed), date_text(out))
+            (active if status == "1" else delisted).append(item)
+        return active, delisted
+    finally:
+        bs.logout()
+
+
 def refresh_catalog() -> dict[str, Any]:
     """Each endpoint is independent; a failure never discards saved symbols."""
     report: dict[str, Any] = {"sources": {}, "errors": []}
     active_codes: set[str] = set()
     try:
-        frame = ak.stock_zh_a_spot_em()
-        items = []
-        for entry in frame.to_dict("records"):
-            code = normalize_code(entry.get("代码"))
-            if is_a_share(code):
-                active_codes.add(code)
-                items.append((code, str(entry.get("名称") or code), None, None))
+        active_fallback, delisted_fallback = _baostock_universe()
+        active_codes = {item[0] for item in active_fallback}
+        report["sources"]["BaoStock在市股票"] = upsert_symbols(active_fallback, "listed", "BaoStock")
+        report["sources"]["BaoStock退市名单"] = upsert_symbols(delisted_fallback, "delisted", "BaoStock", active_codes)
+    except Exception as exc:
+        report["errors"].append(f"BaoStock股票清单: {exc}")
+        LOG.warning("BaoStock catalog failed: %s", exc)
+    try:
+        items = _eastmoney_active()
+        active_codes.update(item[0] for item in items)
         report["sources"]["东方财富在市股票"] = upsert_symbols(items, "listed", "东方财富", active_codes)
     except Exception as exc:
         report["errors"].append(f"东方财富在市股票: {exc}")
         LOG.warning("Active catalog source failed: %s", exc)
-        active_codes = {entry["code"] for entry in rows("SELECT code FROM symbols WHERE status='listed'")}
+        if not active_codes:
+            active_codes = {entry["code"] for entry in rows("SELECT code FROM symbols WHERE status='listed'")}
 
     sources: tuple[tuple[str, Callable[[], pd.DataFrame]], ...] = (
         ("上交所退市名单", lambda: ak.stock_info_sh_delist(symbol="全部")),

@@ -12,18 +12,22 @@ The system SHALL maintain searchable Shanghai, Shenzhen, and Beijing A-share sym
 - **THEN** the matching symbol appears with a delisted label and its actual available history range
 
 ### Requirement: Background initial download
-The system SHALL download the available daily history for the full symbol catalog, limited to the most recent 20 years or the listing date, in a resumable background job. The dashboard SHALL remain usable while the job runs and SHALL show progress, failures, and retryability.
+The system SHALL download the available daily history for the full symbol catalog, limited to the most recent 20 years or the listing date, in a resumable background job. It SHALL track which date ranges were successfully checked, so an interrupted or failed interior range can be retried. The dashboard SHALL remain usable while the job runs and SHALL show progress, failures, and retryability.
 
 #### Scenario: Restart during download
 - **WHEN** the application restarts after a partial full-market download
-- **THEN** the saved bars remain available and the remaining symbols can be resumed without restarting completed histories
+- **THEN** the saved bars remain available and unchecked date ranges can be resumed without restarting verified ranges
 
 ### Requirement: Incremental full-market update
-The system SHALL offer an Update action covering all cataloged stocks and the five configured indexes. On ordinary updates it SHALL request dates after each stored last date and avoid duplicate bars. It MAY re-fetch older adjusted prices only when necessary to correct a detected corporate-action rebase. It SHALL exclude incomplete current-day bars before the market close.
+The system SHALL offer an Update action covering all cataloged stocks and the five configured indexes. On ordinary updates it SHALL request unchecked ranges, including new dates after the last verified range and any known interior gaps, and avoid duplicate bars. It MAY re-fetch older adjusted prices only when necessary to correct a detected corporate-action rebase. It SHALL exclude incomplete current-day bars before the market close.
 
 #### Scenario: Four-day gap
 - **WHEN** a stock's last saved bar is September 16 and the user updates on September 20
 - **THEN** the stock's normal request begins after September 16 and stored bars remain unique by date
+
+#### Scenario: Interrupted interior range
+- **WHEN** an earlier date range was not verified because its fetch failed
+- **THEN** the next update retries that range even if later bars have already been saved
 
 #### Scenario: Update before and after close
 - **WHEN** the user updates before the market close and again after the close
@@ -37,9 +41,8 @@ The system SHALL show completed daily values and recent history for the Shanghai
 - **THEN** its latest saved date and closing value remain visible
 
 ### Requirement: Source transparency
-The system SHALL use Eastmoney as the primary stock source, SHALL label any alternate source used for a symbol, and SHALL retain failures rather than silently treating unavailable history as a full dataset.
+The system SHALL use Eastmoney as the primary stock source, SHALL label the source of each saved bar or contiguous source range, and SHALL retain failures rather than silently treating unavailable history as a full dataset.
 
 #### Scenario: Primary source fails
 - **WHEN** Eastmoney fails and an alternate public source supplies history
 - **THEN** the saved symbol metadata identifies the alternate source and the available date range
-

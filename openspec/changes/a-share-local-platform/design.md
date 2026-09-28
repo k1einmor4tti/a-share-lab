@@ -25,19 +25,19 @@ Use AKQuant's MIT-licensed Python/Rust backtest engine and AKShare as dependenci
 
 ### Symbol files plus metadata database
 
-Store each symbol's raw and forward-adjusted bars in compressed Parquet. Store catalog, coverage, jobs, skill metadata and run metadata in SQLite with WAL enabled. Atomic file replacement protects each saved series from interrupted writes. The job worker records per-symbol failure and can resume from the last saved date. The prior sampled JSON cache is never treated as daily bars.
+Store each symbol's raw and forward-adjusted bars in compressed Parquet, retaining per-bar source. Store catalog, verified date-range coverage, jobs, skill metadata and run metadata in SQLite with WAL enabled. Atomic file replacement protects each saved series from interrupted writes. The job worker retries unchecked date ranges, including failed interior ranges, without relying solely on the last saved bar. Gaps caused by genuine trading suspensions are distinguished from failed fetches by recording successfully checked ranges; suspicious long gaps can be checked against the trading calendar and a second source. The prior sampled JSON cache is never treated as daily bars.
 
 ### Source and adjustment policy
 
-Use Eastmoney via AKShare first. Try BaoStock for unavailable stock histories and label the result. Keep the source per symbol and in saved run metadata. Normal updates request after the last saved bar. Compare an old adjusted anchor with the current source; when it changes, re-fetch that adjusted series. Exclude today's bar until after the close in Asia/Shanghai. Delisted catalogs are assembled from current stocks plus available Shanghai, Shenzhen and Eastmoney delisting lists; report coverage gaps rather than implying completeness.
+Use Eastmoney via AKShare first. Try BaoStock for unavailable stock histories and label the result on each bar or contiguous source range. Normal updates request unchecked ranges after the last verified date and any failed interior intervals. Compare an old adjusted anchor with the current source; when it changes, re-fetch that adjusted series. Exclude today's bar until after the close in Asia/Shanghai. Delisted catalogs are assembled from current stocks plus available Shanghai, Shenzhen and Eastmoney delisting lists; report coverage gaps rather than implying completeness.
 
 ### Simulation contract
 
-Each strategy module generates signals only from bars available through that close. AKQuant receives the series and applies next-open fills, T+1, lot size and configured fees. Results include equity, metrics, orders/trades and a CSI 300 benchmark. Modules declare a schema of parameter defaults and bounds so the UI can render forms without strategy-specific code.
+Each strategy module generates signals only from bars available through that close. AKQuant receives the series and applies next-open fills, T+1, lot size and configured fees. Results include equity, metrics, orders/trades and a CSI 300 benchmark. Each run stores a compressed immutable input snapshot, SHA-256 checksum, exact engine/dependency versions and the source of each input bar; later data corrections cannot silently change a saved run. Modules declare a schema of parameter defaults and bounds so the UI can render forms without strategy-specific code.
 
 ### Assistant boundary
 
-Store imported Markdown text under a managed directory. Local directory imports and GitHub downloads are size-limited, path-checked, and never executed. Send selected skill text and current strategy context only to `127.0.0.1:3080` via DSH's RPC protocol. Assistant failure leaves the rest of the app working.
+Store imported Markdown text under a managed directory. The browser uploads a selected local directory; GitHub downloads are size-limited and path-checked. Neither path executes imported content. Before skill-aware chat, verify that the DSH preset has no tools, then create a dedicated session using that preset and send selected skill text as explicitly delimited untrusted reference data. If a tool-free preset cannot be verified, disable skill-aware DSH chat and report the setup needed. Assistant failure leaves the rest of the app working.
 
 ### Delivery and review
 

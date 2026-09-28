@@ -19,7 +19,7 @@ The backtest SHALL use completed daily bars, next-session execution for signals 
 - **THEN** the backtest does not execute a sale of those newly bought shares that day
 
 ### Requirement: Reproducible results
-Each run SHALL save its stock, strategy, parameters, history range, source and adjustment method, engine version, headline metrics, equity series, orders or trades, and benchmark comparison. The user SHALL be able to reopen and export a completed result.
+Each run SHALL save its stock, strategy, parameters, history range, per-bar or per-range data provenance, adjustment method, exact engine and dependency versions, an immutable input-data snapshot with a checksum, headline metrics, equity series, orders or trades, and benchmark comparison. The user SHALL be able to reopen and export a completed result.
 
 #### Scenario: Reopen a prior run
 - **WHEN** the user reopens a saved backtest
@@ -31,4 +31,3 @@ The system SHALL reject a backtest with insufficient data for the selected strat
 #### Scenario: Missing history
 - **WHEN** a stock has no local bars
 - **THEN** the UI explains that data must be downloaded before the backtest can run
-

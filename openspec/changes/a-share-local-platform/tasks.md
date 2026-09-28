@@ -1,26 +1,26 @@
 ## 1. Repository and specification
 
 - [x] 1.1 Initialize the GitHub-linked local repository with ignored runtime data, dependency manifest, and validated OpenSpec artifacts; commit and push.
-- [ ] 1.2 Have a sub-agent review phase 1 scope and repository setup; commit any corrections separately.
+- [x] 1.2 Have a sub-agent review phase 1 scope and repository setup; commit any corrections separately.
 
 ## 2. Market data
 
 - [ ] 2.1 Implement the current and delisted stock catalog with local search and source labeling; verify representative codes; commit.
-- [ ] 2.2 Implement raw and adjusted stock and index daily Parquet storage with incremental updates and rebase detection; verify initial and gap updates; commit.
+- [ ] 2.2 Implement raw and adjusted stock and index daily Parquet storage with verified coverage ranges, interior-gap repair, per-bar provenance and rebase detection; verify initial and gap updates; commit.
 - [ ] 2.3 Implement resumable full-market background jobs, progress, failure reporting and retry; commit.
 - [ ] 2.4 Have a sub-agent review phase 2 data behavior and coverage claims; commit fixes separately.
 
 ## 3. Strategy backtesting
 
 - [ ] 3.1 Implement five registered single-stock strategy modules and parameter schemas; commit.
-- [ ] 3.2 Integrate AKQuant with A-share execution settings, benchmark, saved result and exports; verify against synthetic and real daily bars; commit.
+- [ ] 3.2 Integrate AKQuant with A-share execution settings, benchmark, immutable input snapshots, saved result and exports; verify against synthetic and real daily bars; commit.
 - [ ] 3.3 Have a sub-agent review phase 3 execution correctness and provenance; commit fixes separately.
 
 ## 4. Local web and assistant
 
 - [ ] 4.1 Build and verify the local market dashboard, search, historical chart and sync progress; commit.
 - [ ] 4.2 Build and verify strategy forms, backtest result view, comparison and downloads; commit.
-- [ ] 4.3 Implement safe local/GitHub SKILL.md import and DSH assistant connection; commit.
+- [ ] 4.3 Implement safe local/GitHub SKILL.md import and tool-free DSH assistant connection; commit.
 - [ ] 4.4 Have a sub-agent review phase 4 usability, input handling and assistant boundary; commit fixes separately.
 
 ## 5. End-to-end delivery
